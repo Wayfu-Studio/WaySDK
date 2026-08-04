@@ -4,24 +4,53 @@
 
 Cụ thể, public surface của module gồm 3 phần:
 
-- **Kotlin chung (`commonMain`)**: file `AdjustMoney.kt` — helper quy đổi số tiền dạng micros về đơn vị tiền tệ mà Adjust yêu cầu khi set revenue.
-- **iOS**: package cinterop `cocoapods.Adjust` (generate từ `src/nativeInterop/cinterop/Adjust.def`, module Objective-C `AdjustSdk`), expose nguyên bộ API của Adjust iOS SDK: `Adjust`, `ADJConfig`, `ADJEvent`, `ADJAdRevenue`, `ADJAttribution`, các hằng `ADJEnvironmentProduction` / `ADJEnvironmentSandbox`, `ADJLogLevelVerbose`, ...
+- **Kotlin chung (`commonMain`)**: `setupAdjust(...)` — hàm `expect/actual` khởi tạo Adjust SDK cho cả hai platform; và `AdjustMoney.kt` — helper quy đổi số tiền dạng micros về đơn vị tiền tệ mà Adjust yêu cầu khi set revenue.
+- **iOS**: `com.adjust_kmp.att.AttPermissionRequester` / `AttState` — xin quyền ATT (IDFA) trước khi init Adjust; và package cinterop `cocoapods.Adjust` (generate từ `src/nativeInterop/cinterop/Adjust.def`, module Objective-C `AdjustSdk`), expose nguyên bộ API của Adjust iOS SDK: `Adjust`, `ADJConfig`, `ADJEvent`, `ADJAdRevenue`, `ADJAttribution`, các hằng `ADJEnvironmentProduction` / `ADJEnvironmentSandbox`, `ADJLogLevelVerbose`, ...
 - **Android**: re-export (`api`) hai thư viện `com.adjust.sdk:adjust-android` và `com.adjust.sdk:adjust-android-webbridge` (v5.7.0) — consumer dùng thẳng `com.adjust.sdk.*` (`Adjust`, `AdjustConfig`, `AdjustEvent`, `AdjustAdRevenue`, ...).
 
 ## Khởi tạo
 
-Module **không có entry point / hàm init riêng**. Việc khởi tạo Adjust (tạo config, gọi `Adjust.initSdk(...)`) do các module tiêu thụ thực hiện trực tiếp trên type platform mà `adjust_kmp` expose (trong WaySDK hiện tại là `wayInstall`). Ví dụ pattern trên iOS:
+Dùng `setupAdjust(...)` từ `commonMain` — không cần chạm vào type platform:
 
 ```kotlin
-import cocoapods.Adjust.ADJConfig
-import cocoapods.Adjust.ADJEnvironmentProduction
-import cocoapods.Adjust.Adjust
+import com.adjust_kmp.setupAdjust
 
-val config = ADJConfig(appToken = token, environment = ADJEnvironmentProduction)
-Adjust.initSdk(config)
+setupAdjust(tokenAdjust = token, isDebug = isDebug) { isSuccess ->
+    // Adjust đã init xong
+}
 ```
 
-Và pattern track revenue dùng helper của module (chung cho cả hai platform):
+### `fun setupAdjust(tokenAdjust: String, isDebug: Boolean, onComplete: (isSuccess: Boolean) -> Unit)`
+
+| Param | Kiểu | Mô tả |
+|---|---|---|
+| `tokenAdjust` | `String` | App token lấy từ dashboard Adjust. |
+| `isDebug` | `Boolean` | `true` → environment sandbox, `false` → environment production. |
+| `onComplete` | `(Boolean) -> Unit` | Android: luôn `true` sau khi init. iOS: `isSuccess` của trạng thái ATT (`true` khi `AUTHORIZED`). |
+
+Cả hai platform đều bật `enableCostDataInAttribution()` và log level `VERBOSE`.
+
+- **Android** (`SetupAdjust.android.kt`): lấy `Context` từ `LifecycleProvider.context`; nếu null → log lỗi và thoát, **không** gọi `onComplete`.
+- **iOS** (`SetupAdjust.ios.kt`): tạo `ADJConfig(appToken, environment)`, **tự xin quyền ATT** qua [`AttPermissionRequester`](#att-ios-package-comadjust_kmpatt) — nếu trạng thái còn `NOT_DETERMINED` thì hiện dialog ATT rồi mới `Adjust.initSdk`, ngược lại init luôn. Caller không cần làm gì thêm.
+
+### ATT (iOS): package `com.adjust_kmp.att`
+
+`object AttPermissionRequester` — xin quyền App Tracking Transparency (IDFA), chỉ có trên `iosMain`.
+
+| API | Mô tả |
+|---|---|
+| `fun getCurrentStatus(): AttState` | Trạng thái ATT hiện tại. Máy iOS < 14.5 → `NOT_APPLICABLE`. |
+| `fun requestPermission(onCompletion: (AttState) -> Unit)` | Hiện dialog ATT sau delay 1s trên main queue; iOS < 14.5 → callback ngay với `NOT_APPLICABLE`. |
+
+`enum class AttState`: `NOT_DETERMINED`, `DENIED`, `AUTHORIZED`, `RESTRICTED`, `NOT_APPLICABLE`; property `isSuccess` = `true` khi `AUTHORIZED`.
+
+`setupAdjust` đã gọi sẵn hai API này, chỉ dùng trực tiếp khi cần đọc / xin quyền ATT ngoài luồng init Adjust.
+
+> App phải khai báo `NSUserTrackingUsageDescription` trong `Info.plist`, nếu không dialog ATT sẽ không hiện.
+>
+> Trước đây hai type này nằm ở `com.wayad.common.utils.att` trong module `wayAd` — đã chuyển hẳn sang đây, import cũ không còn.
+
+Track revenue dùng helper của module (chung cho cả hai platform):
 
 ```kotlin
 import com.adjust_kmp.adjustRevenueFromMicros
@@ -68,7 +97,7 @@ Quy đổi số tiền dạng micros (receiver `Long`) về đơn vị tiền t�
 
 ## Public models
 
-Module **không định nghĩa model riêng** nào. Mọi model (event, config, attribution, ad revenue) là type gốc của Adjust SDK trên từng platform, được expose transitively như mô tả ở trên.
+Chỉ có `AttState` (enum, iOS only — xem phần ATT ở trên). Mọi model còn lại (event, config, attribution, ad revenue) là type gốc của Adjust SDK trên từng platform, được expose transitively như mô tả ở trên.
 
 ## Lưu ý platform
 

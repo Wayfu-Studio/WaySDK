@@ -84,7 +84,7 @@ Entry point của module. Giữ `WayAdConfig`, danh sách scope đã đăng ký,
 
 #### `fun init(wayAdConfig: WayAdConfig, isDebug: Boolean, scopes: List<NetworkAdapterScope> = listOf(AdmobNetworkAdapterScope))`
 
-Khởi tạo đồng bộ, **không** chạy luồng consent UMP. Lưu config + cờ debug, đăng ký `scopes`; trên Android gọi `setupAdjust` ngay; gọi `adapter.initialize()` cho từng scope; set `isKitInitialized = true`; khởi tạo `UserInstallKit` (module wayInstall).
+Khởi tạo đồng bộ, **không** chạy luồng consent UMP. Lưu config + cờ debug, đăng ký `scopes`; trên Android gọi `com.adjust_kmp.setupAdjust` ngay; gọi `adapter.initialize()` cho từng scope; set `isKitInitialized = true`; khởi tạo `UserInstallKit` (module wayInstall).
 
 | Param | Kiểu | Mô tả |
 |---|---|---|
@@ -96,7 +96,7 @@ Khởi tạo đồng bộ, **không** chạy luồng consent UMP. Lưu config + 
 
 #### `fun init(wayAdConfig: WayAdConfig, isDebug: Boolean = false, scopes: List<NetworkAdapterScope> = listOf(AdmobNetworkAdapterScope), onComplete: () -> Unit = {})`
 
-Overload bất đồng bộ, **có** luồng consent: gọi `requestConsentInfoUpdate` (Google UMP — hiện form consent nếu cần) trước, sau đó (riêng iOS thêm bước `setupAdjust` — bao gồm xin quyền ATT) rồi mới gọi overload `init` 3 tham số ở trên và cuối cùng `onComplete()`.
+Overload bất đồng bộ, **có** luồng consent: gọi `requestConsentInfoUpdate` (Google UMP — hiện form consent nếu cần) trước, sau đó (riêng iOS thêm bước `com.adjust_kmp.setupAdjust` — bao gồm xin quyền ATT) rồi mới gọi overload `init` 3 tham số ở trên và cuối cùng `onComplete()`.
 
 | Param | Kiểu | Mô tả |
 |---|---|---|
@@ -142,17 +142,7 @@ Bật/tắt cờ toàn cục `canLoadGlobalAds` (mặc định `true`) — hoạ
 
 ### Hàm expect top-level trên `WayAdKit` (`com.wayad.common`)
 
-#### `fun WayAdKit.setupAdjust(wayAdConfig: WayAdConfig, isDebug: Boolean, onComplete: (isSuccess: Boolean) -> Unit)`
-
-Khởi tạo Adjust SDK. Android: init ngay với environment sandbox/production theo `isDebug`, `onComplete(true)` (nếu thiếu context thì chỉ log lỗi, **không gọi** `onComplete`). iOS: nếu ATT chưa xác định thì xin quyền ATT trước rồi mới `Adjust.initSdk`; `isSuccess = true` chỉ khi ATT `AUTHORIZED`.
-
-| Param | Kiểu | Mô tả |
-|---|---|---|
-| `wayAdConfig` | `WayAdConfig` | Lấy `tokenAdjust`. |
-| `isDebug` | `Boolean` | Sandbox vs production. |
-| `onComplete` | `(Boolean) -> Unit` | Kết quả (iOS: theo trạng thái ATT). |
-
-**Trả về:** `Unit`.
+> `WayAdKit.setupAdjust(...)` đã chuyển sang module `adjust_kmp` thành hàm top-level `com.adjust_kmp.setupAdjust(tokenAdjust, isDebug, onComplete)` (xem `adjust_kmp/API.md`). `WayAdKit` gọi hàm này bên trong `init`, consumer không cần gọi trực tiếp.
 
 #### `fun WayAdKit.requestConsentInfoUpdate(activity: Any?, onComplete: (Boolean) -> Unit)`
 
@@ -572,10 +562,7 @@ Khóa mutual-exclusion đa nền tảng (Android dùng `kotlin.synchronized`).
 
 Nhận diện platform hiện tại.
 
-#### `AttPermissionRequester` (object, iOS only, `com.wayad.common.utils.att`)
-
-- `fun getCurrentStatus(): AttState` — trạng thái App Tracking Transparency hiện tại (`NOT_APPLICABLE` nếu iOS < 14.5).
-- `fun requestPermission(onCompletion: (status: AttState) -> Unit)` — xin quyền ATT (delay 1s trước khi hiện dialog hệ thống).
+> `AttPermissionRequester` / `AttState` (iOS only) đã chuyển sang module `adjust_kmp`, package `com.adjust_kmp.att` — vẫn dùng được từ `wayAd` vì `wayAd` expose `api(project(":adjust_kmp"))`, nhưng import cũ `com.wayad.common.utils.att.*` không còn.
 
 #### `fun NativeAdState.getNativeAd()` (extension, mỗi platform)
 
@@ -701,16 +688,6 @@ Chỉ định cách render native AppLovin, khác nhau theo platform:
 
 Ad unit id test chính thức của Google cho từng platform: `APP_OPEN`, `BANNER`, `BANNER_ADAPTIVE`, `INTERSTITIAL`, `INTERSTITIAL_VIDEO`, `NATIVE`, `NATIVE_VIDEO`, `REWARDED`, `REWARDED_INTERSTITIAL` (đều `String`).
 
-### `AttState` (enum, iOS only, `com.wayad.common.utils.att`)
-
-| Giá trị | Ý nghĩa |
-|---|---|
-| `NOT_DETERMINED` | Chưa hỏi quyền ATT. |
-| `DENIED` | User từ chối. |
-| `AUTHORIZED` | User cho phép (duy nhất giá trị có `isSuccess == true`). |
-| `RESTRICTED` | Bị hệ thống hạn chế. |
-| `NOT_APPLICABLE` | iOS < 14.5, không áp dụng. |
-
 ---
 
 ## Lưu ý platform
@@ -722,7 +699,7 @@ Ad unit id test chính thức của Google cho từng platform: `APP_OPEN`, `BAN
 - **AppLovin native/banner view:** Android render qua `MaxNativeAdViewBinder` (layout XML); iOS render qua template string của MAX. `MaxNativeRenderSpec` che khác biệt này ở tầng Compose.
 - **Native ad layout AdMob:** Android compose từng thành phần (`Headline`, `MediaView`, `CallToAction`…) bind vào `NativeAdView` thật; iOS chỉ có 2 template UIKit dựng sẵn (`SmallNativeAdTemplate`, `NativeAdFullscreenTemplate`) — `content` không thể tự do như Android. Android còn tự reload native khi video kết thúc (tắt bằng `enableUseCaseReloadWhenVideoEnd(false)`).
 - **View XML** (`LayoutAdView`, `AdmobBannerAdView`, `AdmobNativeAdView`, `AppLovin*AdView`, `FloatingNativeAdView`, `AdmobLoadingAdDialog`, `AdmobNativeXmlConfig`) chỉ có trên Android.
-- **iOS-only:** `AttPermissionRequester`/`AttState`; các UIView public `ProgrammaticNativeAdView`, `ProgrammaticFullscreenAdView`, `ProgrammaticFloatingAdView` (được các template dùng nội bộ, ít khi gọi trực tiếp).
+- **iOS-only:** các UIView public `ProgrammaticNativeAdView`, `ProgrammaticFullscreenAdView`, `ProgrammaticFloatingAdView` (được các template dùng nội bộ, ít khi gọi trực tiếp).
 - **Giải phóng tài nguyên iOS:** các layout Compose iOS gọi `adapter.onAdReleased(adUnitId)` khi view release để xóa delegate/loader — nếu tự nhúng view gốc, cần tự gọi tương tự.
 
 ## Log TAG

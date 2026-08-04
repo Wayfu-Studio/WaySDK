@@ -176,6 +176,8 @@ Thông tin sản phẩm dùng chung 2 platform, trả về từ `queryProducts`.
 
 `companion object` có `mockProductInfos(): List<ProductInfo>` — data mẫu cho preview/demo.
 
+Với SUBS, xem thêm [Tính giá theo chu kỳ](#tính-giá-theo-chu-kỳ) — extension quy giá các gói về cùng một chu kỳ để so sánh.
+
 ### `Money`
 
 | Field | Kiểu | Ý nghĩa |
@@ -188,12 +190,138 @@ Thông tin sản phẩm dùng chung 2 platform, trả về từ `queryProducts`.
 
 | Field | Kiểu | Ý nghĩa |
 |---|---|---|
-| `periodISO8601` | `String?` | Chu kỳ cơ bản ISO-8601: `P1W` / `P1M` / `P1Y`... |
-| `trialPeriodISO8601` | `String?` | Trial period nếu có (`P7D`...). |
+| `periodISO8601` | `String?` | Chu kỳ cơ bản, chuỗi ISO-8601 **thô từ store**: `P1W` / `P4W` / `P1M` / `P1Y`... `null` nếu store không trả chu kỳ. |
+| `trialPeriodISO8601` | `String?` | Free trial period nếu có (`P3D`, `P7D`...). |
 | `introPrice` | `Money?` | Giá intro/ưu đãi nếu có. |
 | `renewalState` | `RenewalState` | Trạng thái auto-renew. |
 | `autoRenewing` | `Boolean?` | Dạng bool đơn giản của renewal; `null` nếu không rõ. |
 | `expiryTimeMs` | `Long?` | Thời điểm hết hạn (epoch millis) nếu biết. |
+
+Hai field ISO ở trên là dữ liệu thô: mỗi store trả một dạng khác nhau cho **cùng một gói** — Google Play `P1W`/`P4W`, StoreKit có thể `P7D`, RevenueCat quy từ `value + unit`. **Đừng so sánh chúng bằng chuỗi.** Dùng 3 property dẫn xuất dưới đây; chúng là computed property nên không xuất hiện trong JSON khi serialize `SubscriptionInfo` (wire format giữ nguyên).
+
+| Property | Kiểu | Ý nghĩa |
+|---|---|---|
+| `period` | `SubscriptionPeriod?` | `periodISO8601` đã parse + chuẩn hoá. `null` nếu store không trả chu kỳ hoặc chuỗi sai format. |
+| `trialPeriod` | `SubscriptionPeriod?` | `trialPeriodISO8601` đã parse. `null` nếu gói không có free trial. |
+| `billingCycle` | `BillingCycle?` | Phân loại chu kỳ cho UI; bằng `period?.cycle`. |
+
+```kotlin
+// Phân biệt gói tuần / tháng / năm — cho kết quả giống nhau trên cả 3 backend
+val label = when (product.subscription?.billingCycle) {
+    BillingCycle.WEEKLY -> "Gói tuần"
+    BillingCycle.MONTHLY -> "Gói tháng"
+    BillingCycle.YEARLY -> "Gói năm"
+    else -> product.subscription?.period?.iso8601.orEmpty()
+}
+
+// Sắp xếp gói từ ngắn đến dài
+val sorted = subs.sortedBy { it.subscription?.period?.approximateDays ?: 0 }
+```
+
+### `SubscriptionPeriod`
+
+Chu kỳ thanh toán đã parse từ ISO-8601. `parse()` chuẩn hoá các dạng **tương đương chính xác** về một biểu diễn duy nhất, nhờ vậy 2 backend trả 2 chuỗi khác nhau vẫn so được bằng `==`:
+
+| Store trả | Sau `parse()` |
+|---|---|
+| `P1W` / `P7D` | `SubscriptionPeriod(1, WEEK)` |
+| `P2W` / `P14D` | `SubscriptionPeriod(2, WEEK)` |
+| `P1Y` / `P12M` | `SubscriptionPeriod(1, YEAR)` |
+| `P30D` | `SubscriptionPeriod(30, DAY)` — 30 không chia hết cho 7 nên giữ đơn vị ngày |
+
+| Field / Property | Kiểu | Ý nghĩa |
+|---|---|---|
+| `value` | `Int` | Số đơn vị. |
+| `unit` | `PeriodUnit` | Đơn vị thời gian. |
+| `iso8601` | `String` | Chuỗi ISO-8601 đã chuẩn hoá (`P1W`) — có thể khác `periodISO8601` gốc nếu store trả dạng tương đương. |
+| `approximateDays` | `Int` | Độ dài xấp xỉ theo ngày; dùng để **so sánh / sắp xếp** các gói. |
+| `cycle` | `BillingCycle` | Phân loại cho UI. |
+
+⚠️ `approximateDays` quy ước MONTH = 30 và YEAR = 365 ngày. Chỉ dùng để so sánh độ dài chu kỳ, **không** dùng để tính ngày hết hạn — cần expiry thật thì đọc `SubscriptionInfo.expiryTimeMs`.
+
+#### `fun parse(iso8601: String?): SubscriptionPeriod?`
+
+Parse phần ngày của duration ISO-8601 (`P[nY][nM][nW][nD]`). Trả `null` khi: input `null`/rỗng, thiếu `P`, thiếu số hoặc thiếu designator (`P1`), designator lạ (`P1X`), designator trùng (`P1M1M`), có phần giờ (`PT12H`, `P1DT12H`), số quá lớn, hoặc tổng độ dài `<= 0` (`P0D`).
+
+Parser cố ý **lenient** ở vài điểm, vì mục tiêu là nuốt được dữ liệu store trả về chứ không phải validate input người dùng: chấp nhận chữ thường và khoảng trắng thừa (` p1m `), không ép đúng thứ tự component của ISO (`P1M1Y` vẫn parse), và cho phép `W` trộn với `Y/M/D` (ISO strict thì không). Dạng nhiều component (`P1Y6M` — không store nào phát) được gộp về tổng ngày xấp xỉ với `unit = DAY`. Nếu dùng `parse()` để validate chuỗi từ nguồn ngoài store, hãy tự siết thêm ở tầng gọi.
+
+### `PeriodUnit`
+
+| Giá trị | `approximateDays` | `isoSuffix` |
+|---|---|---|
+| `DAY` | 1 | `D` |
+| `WEEK` | 7 | `W` |
+| `MONTH` | 30 | `M` |
+| `YEAR` | 365 | `Y` |
+
+### `BillingCycle`
+
+Phân loại chu kỳ theo cách người dùng hiểu, suy ra từ `SubscriptionPeriod.approximateDays`. Cố ý **gom các biến thể tương đương về cùng một nhóm** để UI không phải xử lý từng dạng chuỗi — cần chính xác tuyệt đối thì đọc `SubscriptionPeriod.value` + `.unit`.
+
+| Giá trị | Khoảng ngày | Khớp với |
+|---|---|---|
+| `DAILY` | 1–2 | `P1D` |
+| `WEEKLY` | 6–8 | `P1W`, `P7D` |
+| `TWO_WEEKS` | 13–16 | `P2W`, `P14D` |
+| `MONTHLY` | 26–32 | `P1M`, `P4W`, `P30D` |
+| `TWO_MONTHS` | 55–63 | `P2M`, `P8W` |
+| `THREE_MONTHS` | 85–95 | `P3M`, `P13W` |
+| `FOUR_MONTHS` | 115–125 | `P4M` |
+| `SIX_MONTHS` | 175–190 | `P6M`, `P26W` |
+| `YEARLY` | 355–375 | `P1Y`, `P12M`, `P52W` |
+| `OTHER` | còn lại | `P10D`, `P5M`... |
+
+`companion object` có `ofApproximateDays(days: Int): BillingCycle` — map thẳng số ngày sang nhóm, dùng khi độ dài chu kỳ đến từ nguồn khác `SubscriptionPeriod`.
+
+Chu kỳ các store thực sự bán: **Google Play** 1 tuần / 4 tuần / 1–2–3–4–6 tháng / 1 năm; **App Store** 1 tuần / 1–2–3–6 tháng / 1 năm (không có 4 tuần và 4 tháng). Không store nào bán gói 2 tuần — `TWO_WEEKS` chỉ xảy ra với backend tự triển khai.
+
+### Tính giá theo chu kỳ
+
+Extension của `ProductInfo` (package `com.waypay.model`) để quy giá các gói về **cùng một chu kỳ** rồi so sánh — dùng cho paywall kiểu "chỉ $0.58/tuần", "tiết kiệm 71%".
+
+#### `fun ProductInfo.pricePer(unit: PeriodUnit = PeriodUnit.WEEK): Money?`
+#### `fun ProductInfo.pricePer(period: SubscriptionPeriod): Money?`
+
+Quy giá 1 chu kỳ thanh toán sang chu kỳ đích, mẫu số chung là `approximateDays`. **Mặc định là 1 tuần** — đơn vị nhỏ nhất cả 2 store đều bán, nên gọi `pricePer()` trên mọi gói đều ra "giá mỗi tuần" so được với nhau.
+
+Một hàm trả lời được cả 2 chiều: quy **xuống** để so gói, quy **lên** để biết tổng chi phí.
+
+| Gói | Gọi | Kết quả |
+|---|---|---|
+| Năm `$29.99` (`P1Y`) | `pricePer()` | `$0.575` mỗi tuần |
+| Năm `$29.99` (`P1Y`) | `pricePer(PeriodUnit.MONTH)` | `$2.46` mỗi tháng |
+| Tuần `$1.99` (`P1W`) | `pricePer(PeriodUnit.YEAR)` | `$103.76` — tổng phải trả trong 1 năm |
+
+Trả `null` khi `type != SUBS` (kiểm cả khi product INAPP lỡ mang theo `subscription`), store không trả chu kỳ (`subscription?.period == null`), hoặc phép nhân **tràn `Long`**. Phân số được rút gọn trước khi nhân nên mọi mức giá thực tế đều nằm trong tầm; `null` ở đây nghĩa là input phi lý, không phải kết quả sai âm thầm.
+
+Cơ sở tính là `ProductInfo.price` — **giá gia hạn cơ bản**, không phải `introPrice` hay giá sau trial. `Money.currencyCode` giữ nguyên; `Money.formatted` được format lại theo **locale thiết bị** (ký hiệu, vị trí, dấu phân cách nhóm) nhưng **số chữ số thập phân lấy theo chính đồng tiền đó**, không theo locale: `VND`/`JPY` → 0 chữ số, `USD` → 2. Đồng tiền không định nghĩa scale (`XXX`) → 2. Làm tròn ở đúng scale đó, half-even, tính trên số nguyên micros nên không có sai số dấu phẩy động.
+
+| micros | `USD` | `VND` |
+|---|---|---|
+| `57_342_465_753` | `$57,342.47` | `₫57,342` |
+| `499_999` | `$0.50` | `₫0` |
+
+Vì locale thiết bị ≠ locale của store nên chuỗi có thể lệch nhẹ so với `price.formatted` gốc. Trả `null` nếu `currencyCode` không phải mã ISO-4217 hợp lệ.
+
+#### `fun ProductInfo.savingsPercentAgainst(baseline: ProductInfo): Int?`
+
+Phần trăm rẻ hơn của gói này so với `baseline`, sau khi quy cả hai về cùng độ dài. Gói năm so gói tuần ở ví dụ trên → `71`. Số **âm** nghĩa là đắt hơn baseline (gói tuần so gói năm → `-246`).
+
+Trả `null` khi một trong hai không phải `SUBS`, thiếu chu kỳ, **khác `currencyCode`**, tràn `Long`, hoặc kết quả không lọt vào range `Int` (gói đắt hơn baseline tới mức phi lý — không wrap thành số sai).
+
+```kotlin
+val subs = pay.queryProducts(ProductType.SUBS)
+val cheapestPerWeek = subs.minByOrNull { it.pricePer()?.amountMicros ?: Long.MAX_VALUE }
+val baseline = subs.firstOrNull { it.subscription?.billingCycle == BillingCycle.WEEKLY }
+
+subs.forEach { p ->
+    val perWeek = p.pricePer()?.formatted            // "$0.58"
+    val save = baseline?.let { p.savingsPercentAgainst(it) }?.takeIf { it > 0 }
+    render(p.price.formatted, perWeek, save?.let { "Tiết kiệm $it%" })
+}
+```
+
+⚠️ Kết quả kế thừa quy ước MONTH = 30 / YEAR = 365 ngày của `approximateDays`, nên là **con số marketing để so sánh**, không phải số tiền store sẽ thực sự charge. Số tiền charge luôn là `ProductInfo.price`.
 
 ### `RenewalState`
 
