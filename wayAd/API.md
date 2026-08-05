@@ -129,16 +129,49 @@ Bọc `requestConsentInfoUpdate` thành hàm suspend.
 
 **Trả về:** `Boolean` — kết quả luồng consent. Lưu ý hành vi **khác nhau giữa 2 platform khi consent đã có sẵn** (status `OBTAINED`/`NOT_REQUIRED`): Android trả `false`, iOS trả `true`. Android còn trả `false` khi activity null hoặc UMP báo lỗi.
 
-#### `fun setCanLoadGlobalAds(enable: Boolean)`
+#### `fun setCanLoadGlobalAds(enable: Boolean)` — **`@Deprecated` (WARNING)**
 
-Bật/tắt cờ toàn cục `canLoadGlobalAds` (mặc định `true`) — hoạt động như **kill-switch ads toàn cục**, tác động ở 2 tầng:
-
-1. **Chặn load ở tầng adapter**: khi `false`, mọi `load*` trong cả 4 adapter (AdMob/AppLovin × Android/iOS) fail ngay với `AdError("Can't load global ads")` — kiểm tra tại thời điểm load, nên set `false` là dừng được cả các lần load/refresh sau đó.
-2. **Default `isVisible` ở tầng factory**: các overload tạo config của `BannerAdFactory`/`NativeAdFactory` (và builder `AdmobNativeXmlConfig` trên Android) dùng `isVisible = canShowAds && WayAdKit.canLoadGlobalAds` làm giá trị mặc định — chỉ áp tại thời điểm TẠO config; config đã tạo trước khi đổi cờ không tự cập nhật `isVisible`.
-
-**Trả về:** `Unit`.
+Alias cũ của [`WayAdToggle.setGlobalEnabled(enable)`](#wayadtoggle-object-comwayadcommon). Vẫn hoạt động, nhưng nên chuyển sang `WayAdToggle` để dùng được cả cờ riêng từng loại. **Trả về:** `Unit`.
 
 > `setNetworkAdapter(adapter)` và các property preload/strategy cũ trên `WayAdKit`, cùng `PreloadManager.preloadAd`/`preloadAdIfEmpty`, `InterstitialAdManager.Companion.*` (và tương tự ở các manager khác) đã bị **`@Deprecated(level = ERROR)`** — không compile được nữa; dùng API tương ứng trên scope (`AdmobNetworkAdapterScope...`).
+
+### `WayAdToggle` (object, `com.wayad.common`)
+
+Kill-switch cho quảng cáo: một cờ **global** cho toàn SDK, cộng một cờ riêng cho **từng [`AdType`](#adtype-enum-comwayadcommonmodel)**. Tất cả mặc định `true`. Một loại chỉ được load khi **cả hai** cờ cùng bật (`canLoad`). Cờ được đọc tại **thời điểm load**, nên tắt giữa chừng là chặn luôn cả các lần load/refresh sau đó.
+
+Tác động ở 2 tầng, giống cờ global cũ:
+
+1. **Chặn load ở tầng adapter**: mọi `load*` trong cả 4 adapter (AdMob/AppLovin × Android/iOS) fail ngay với `AdError` — message là `"Can't load global ads"` khi tắt global, hoặc `"Can't load <loại> ads"` (ví dụ `"Can't load native ads"`) khi chỉ tắt riêng loại đó.
+2. **Default `isVisible` ở tầng factory**: `BannerAdFactory.create(...)` dùng `canShowAds && WayAdToggle.canLoad(AdType.BANNER)`, `NativeAdFactory.create(...)` và builder `AdmobNativeXmlConfig` (Android) dùng `AdType.NATIVE` — chỉ áp tại thời điểm TẠO config; config đã tạo trước khi đổi cờ không tự cập nhật `isVisible`.
+
+| Thành viên | Chữ ký | Mô tả |
+|---|---|---|
+| `isGlobalEnabled` | `val: Boolean` | Trạng thái cờ global. |
+| `setGlobalEnabled` | `(enable: Boolean)` | Bật/tắt toàn bộ ads, bất kể cờ riêng từng loại. |
+| `isTypeEnabled` | `(type: AdType): Boolean` | Cờ riêng của loại, **không** tính cờ global. |
+| `setEnabled` | `(type: AdType, enable: Boolean)` | Bật/tắt riêng một loại. |
+| `setEnabled` | `(types: Collection<AdType>, enable: Boolean)` | Bật/tắt nhiều loại một lượt. |
+| `canLoad` | `(type: AdType): Boolean` | Kết quả cuối cùng: `isGlobalEnabled && isTypeEnabled(type)`. |
+| `enableAll` | `()` | Đưa mọi cờ (global + từng loại) về `true`. |
+
+```kotlin
+import com.wayad.common.WayAdToggle
+import com.wayad.common.model.AdType
+
+WayAdToggle.setEnabled(AdType.APP_OPEN, false)                              // chỉ tắt app open
+WayAdToggle.setEnabled(listOf(AdType.BANNER, AdType.NATIVE), false)         // tắt banner + native
+WayAdToggle.setGlobalEnabled(false)                                         // kill-switch toàn bộ
+WayAdToggle.canLoad(AdType.BANNER)                                          // false (global đang tắt)
+WayAdToggle.enableAll()                                                     // reset về mặc định
+```
+
+Mọi cờ là atomic, đọc/ghi được từ bất kỳ thread nào; trạng thái chỉ tồn tại trong process (không persist qua lần mở app sau).
+
+### `AdType` (enum, `com.wayad.common.model`)
+
+`BANNER`, `NATIVE`, `INTERSTITIAL`, `REWARD`, `INTERSTITIAL_REWARD`, `APP_OPEN` — khoá cho cờ bật/tắt của `WayAdToggle`.
+
+> AppLovin MAX chưa hỗ trợ rewarded-interstitial, nên `AdType.INTERSTITIAL_REWARD` chỉ có tác dụng với AdMob.
 
 ### Hàm expect top-level trên `WayAdKit` (`com.wayad.common`)
 
@@ -291,12 +324,12 @@ Các object factory tạo `*AdRequest` (1–3 ad unit, waterfall cao→thấp) h
 | `create` | `(canShowAds: Boolean = true, adUnitId: String, adSize: BannerAdSize = ADAPTIVE, collapsePosition: CollapsePosition? = null)` | `BannerAdRequest` |
 | `create` | `(canShowAds = true, adUnitId1: String, adUnitId2: String, canShowAdsHigh = true, adSize, collapsePosition)` | `BannerAdRequest` (waterfall 2 tầng) |
 | `create` | `(canShowAds = true, adUnitId1, adUnitId2, adUnitId3, canShowAdsHigh = true, canShowAdsMedium = true, adSize, collapsePosition)` | `BannerAdRequest` (waterfall 3 tầng) |
-| `create` | `(canShowAds: Boolean, adUnitId: String, isVisible: Boolean = canShowAds && WayAdKit.canLoadGlobalAds, autoRefresh: Boolean = true, timeToReload: Long = 20_000, adPlacementId: String? = null, reloadOnResume: Boolean = true)` | `AdmobBannerConfig` (config cho Compose/XML view; `adPlacementId != null` thì bật preload) |
-| `create` | `(canShowAds, canShowAdsHigh, adUnitId1, adUnitId2, adPlacementId: String, isVisible..., autoRefresh = true, reloadOnResume = true)` | `AdmobBannerConfig` waterfall 2 tầng |
+| `create` | `(canShowAds: Boolean, adUnitId: String, isVisible: Boolean = canShowAds && WayAdToggle.canLoad(AdType.BANNER), autoRefresh: Boolean = true, timeToReload: Long = 20_000, adPlacementId: String? = null, reloadOnResume: Boolean = true)` | `AdmobBannerConfig` (config cho Compose/XML view; `adPlacementId != null` thì bật preload) |
+| `create` | `(canShowAds, canShowAdsHigh, adUnitId1, adUnitId2, adPlacementId: String? = null, isVisible..., autoRefresh = true, timeToReload: Long = 20_000, reloadOnResume = true)` | `AdmobBannerConfig` waterfall 2 tầng |
 
 #### `NativeAdFactory` (object)
 
-Tương tự `BannerAdFactory` (không có adSize/collapse): 3 overload trả `NativeAdRequest`, 2 overload trả `AdmobNativeConfig` (1 hoặc 2 ad unit, có `adPlacementId`). Android bổ sung extension `NativeAdFactory.create(canShowAds, primaryAdUnitId, secondaryAdUnitId, canShowAdsHigh, adPlacementId, nativeLayoutId, isVisible, autoRefresh, reloadWhenResume): AdmobNativeXmlConfig` cho view XML.
+Tương tự `BannerAdFactory` (không có adSize/collapse): 3 overload trả `NativeAdRequest`, 2 overload trả `AdmobNativeConfig` với chữ ký `(canShowAds, [canShowAdsHigh,] adUnitId…, adPlacementId: String, isVisible…, autoRefresh = true, timeToReload: Long = 20_000, reloadOnResume = true)`. Android bổ sung extension `NativeAdFactory.create(canShowAds, primaryAdUnitId, secondaryAdUnitId, canShowAdsHigh, adPlacementId, nativeLayoutId, isVisible, autoRefresh, timeToReload = 20_000, reloadWhenResume): AdmobNativeXmlConfig` cho view XML.
 
 #### `InterstitialAdFactory` / `RewardAdFactory` / `AppOpenAdFactory` / `InterstitialRewardAdFactory` (object)
 
