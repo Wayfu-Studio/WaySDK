@@ -72,6 +72,8 @@ Helper chọn API key theo platform hiện tại (RC yêu cầu key riêng cho G
 
 RC không tự biết user của app là ai bên Adjust/AppsFlyer. Mỗi integration của RC được kích hoạt bằng một **subscriber attribute** chứa ID của nền tảng đó (`$adjustId`, `$appsflyerId`...); có attribute thì RC mới forward purchase server-side. `attachAttribution` lo toàn bộ vòng đời của các attribute này.
 
+Đây mới là **một nửa** của setup. Nửa còn lại nằm trên dashboard: bật integration và map từng loại event của RC sang event token của Adjust — xem [Setup dashboard](#setup-dashboard-rc--map-event--token-adjust).
+
 ### `class AttributionSource` (package `com.waypay.revenuecat.attribution`)
 
 Constructor `internal` — tạo bằng factory. `adjust()` tự đọc `adid` từ Adjust SDK (WaySDK đã có sẵn dependency `:adjust_kmp`); các nền tảng còn lại nhận lambda `suspend () -> String?` vì SDK của chúng nằm ở phía app.
@@ -118,6 +120,33 @@ WayPayRevenueCat.attachAttribution(
 - **Tự gắn lại khi đổi user** — subscriber attribute thuộc về từng app user id. Module theo dõi `appUserID` qua listener `CustomerInfo` và tự re-apply toàn bộ ID đã resolve sau `Purchases.awaitLogIn(...)` / `awaitLogOut()`; app không phải gọi lại.
 - **Gọi càng sớm càng tốt** — RC đính attribute vào purchase tại thời điểm mua. ID gắn sau khi user đã mua thì purchase đó đã forward đi mà không có địa chỉ nền tảng → mất attribution cho chính giao dịch đó. Đặt `attachAttribution` lúc khởi động, trước khi mở paywall.
 - **Idempotent** — gọi lặp không resolve lại source đã xong hoặc đang chạy.
+
+### Setup dashboard RC — map event → token Adjust
+
+`attachAttribution` chỉ gắn `$adjustId`. RC vẫn chưa gửi gì cho tới khi bật integration và điền event token: **RC dashboard → Project settings → Integrations → Adjust**, nhập app token (iOS / Android riêng) + event token cho từng loại event, chọn revenue **gross** (trước chiết khấu store) hay **net** (sau chiết khấu + thuế ước tính), và OAuth token nếu bên Adjust đã bật S2S security.
+
+Bộ token đã tạo bên Adjust nằm ở [`docs/adjust-events.csv`](docs/adjust-events.csv):
+
+| Event RC | Tên event Adjust | Token | Bắn khi | Revenue |
+|---|---|---|---|---|
+| Initial purchase | `initial_purchase` | `c2k4b4` | Mua trả tiền lần đầu, KHÔNG qua trial (sub có giá ngay, hoặc intro price). | ✅ |
+| Trial started | `trial_started` | `u1g9n8` | Bắt đầu free trial. | ❌ (giá 0) |
+| Trial converted | `trial_converted` | `6sc1zo` | Trial hết hạn và charge thành công lần đầu — **event ROAS quan trọng nhất**, là chỗ tiền thật xuất hiện. | ✅ |
+| Trial cancelled | `trial_cancelled` | `m2qkr1` | User tắt auto-renew TRONG lúc trial. Vẫn còn quyền tới hết hạn — không phải mất quyền. | ❌ |
+| Renewal | `renewal` | `gf8njl` | Mỗi kỳ gia hạn của sub trả tiền. Đây là phần long-tail của cohort. | ✅ |
+| Cancellation | `cancellation` | `wrf2r6` | User tắt auto-renew của sub trả tiền, hoặc bị refund / billing error. **Không** đồng nghĩa mất quyền ngay. | ❌ |
+| Uncancellation | `uncancellation` | `2sli0i` | User bật lại auto-renew trước khi hết hạn (đảo ngược `cancellation`). | ❌ |
+| Expiration | `expiration` | `9d3t08` | Sub hết hạn thật — thời điểm user mất quyền. Optional; là event duy nhất đo được churn thực. | ❌ |
+| Non-subscription purchase | `non_subscription_purchase` | *(điền sau)* | Mua one-time (consumable / non-consumable). Optional — chỉ cần nếu app có IAP ngoài subscription. | ✅ |
+
+- **`non_subscription_purchase` chưa có token** — dòng này đã có trong CSV nhưng cột `token` để trống, vì token do Adjust sinh ra. Tạo bên *Adjust → App → All settings → Events → New event*, rồi điền chuỗi 6 ký tự vào CSV và vào form RC. Bỏ qua nếu app chỉ bán subscription. ⚠️ Đừng bịa token: RC gửi tới token không tồn tại thì Adjust nuốt luôn, không báo lỗi ở phía nào cả.
+- `vi8m3g` / `ad_impression_2` trong CSV **không thuộc RC** — đó là token ad revenue của `:wayAd` (`AdConfig.tokenAdImpression`), do SDK track client-side. Đừng điền vào form của RC.
+- **Bỏ trống một ô = tắt loại event đó.** Không map thì RC im lặng bỏ qua, không log lỗi.
+- **Token Adjust là per-app.** iOS app và Android app là hai app riêng trong Adjust với app token + event token riêng — bộ CSV này chỉ dùng cho một app; app còn lại phải tạo bộ token khác và điền đúng cột. Điền chéo → doanh thu về sai app.
+- **Refund không trừ ngược được.** Integration Adjust của RC không hỗ trợ negative revenue: refund đi qua `cancellation` và Adjust [không nhận event revenue < 0.001](https://help.adjust.com/en/article/server-to-server-events#track-revenue) nên gửi không kèm revenue. Muốn ROAS trừ refund thì phải tự đối soát bằng webhook RC.
+- **Payload rất mỏng.** RC chỉ gửi `app_token`, `event_token`, `s2s`, `created_at_unix`, `adid`, `environment`, `currency`, `revenue`, `idfa`/`gps_adid`, `ip`. Product ID, app user ID, subscriber attribute **không** được gửi → không thể tách doanh thu theo gói ngay trên Adjust; cần chi tiết thì dùng [webhook RC](https://www.revenuecat.com/docs/integrations/webhooks).
+- **Test sandbox**: RC gửi event sandbox với `environment = sandbox`; bên Adjust xem bằng filter *SANDBOX MODE*.
+- ⚠️ Bật xong thì **đừng** đồng thời truyền `AdjustPurchaseTracker` vào `PurchaseConfig.tracker` — một purchase sẽ được đếm hai lần.
 
 ### Lưu ý platform
 
