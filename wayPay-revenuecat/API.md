@@ -151,7 +151,7 @@ Bộ token đã tạo bên Adjust nằm ở [`docs/adjust-events.csv`](docs/adju
 ### Lưu ý platform
 
 - **iOS**: `$idfa` sẽ null nếu ATT chưa `AUTHORIZED` (`setupAdjust` đã tự xin quyền — xem `adjust_kmp/API.md`). `adid` không phụ thuộc ATT nên integration Adjust vẫn chạy.
-- **Đọc `adid`**: Android dùng `Adjust.getAdidWithTimeout` — Adjust tự đặt timer và gỡ callback khi hết hạn, không đọng. iOS 5.4.6 chỉ có `adidWithCompletionHandler` (không có bản timeout) nên timeout do coroutine giữ; callback quá hạn vẫn nằm trong `cachedAdidReadCallbacksArray` của Adjust cho tới khi `adid` xuất hiện. Vì vậy nâng `maxAttempts` lên cao thì cân nhắc nâng `AttributionSource.adjust(readTimeoutMs)` thay vì tăng số lần đọc.
+- **Đọc `adid`**: Android dùng `Adjust.getAdidWithTimeout` — Adjust tự đặt timer và gỡ callback khi hết hạn, không đọng. iOS hiện vẫn gọi `adidWithCompletionHandler` (bản không timeout) nên timeout do coroutine giữ; callback quá hạn vẫn nằm trong `cachedAdidReadCallbacksArray` của Adjust cho tới khi `adid` xuất hiện. Vì vậy nâng `maxAttempts` lên cao thì cân nhắc nâng `AttributionSource.adjust(readTimeoutMs)` thay vì tăng số lần đọc. *(Adjust iOS 5.8.0 đã có `adidWithTimeout:completionHandler:` đối xứng với Android — chuyển sang dùng nó sẽ xoá hẳn phần callback đọng, hiện chưa làm.)*
 - **Android**: app target API 33+ phải khai báo permission `com.google.android.gms.permission.AD_ID`, nếu không `$gpsAdId` trả về chuỗi toàn số 0. App hướng tới trẻ em thì đặt `collectDeviceIdentifiers = false` theo [data safety của Google Play](https://rev.cat/google-plays-data-safety).
 - ⚠️ Bật integration server-side rồi thì **đừng** truyền `AdjustPurchaseTracker` vào `PurchaseConfig.tracker` — double-count revenue.
 

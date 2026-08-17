@@ -6,7 +6,7 @@ Cụ thể, public surface của module gồm 3 phần:
 
 - **Kotlin chung (`commonMain`)**: `setupAdjust(...)` — hàm `expect/actual` khởi tạo Adjust SDK cho cả hai platform; và `AdjustMoney.kt` — helper quy đổi số tiền dạng micros về đơn vị tiền tệ mà Adjust yêu cầu khi set revenue.
 - **iOS**: `com.adjust_kmp.att.AttPermissionRequester` / `AttState` — xin quyền ATT (IDFA) trước khi init Adjust; và package cinterop `cocoapods.Adjust` (generate từ `src/nativeInterop/cinterop/Adjust.def`, module Objective-C `AdjustSdk`), expose nguyên bộ API của Adjust iOS SDK: `Adjust`, `ADJConfig`, `ADJEvent`, `ADJAdRevenue`, `ADJAttribution`, các hằng `ADJEnvironmentProduction` / `ADJEnvironmentSandbox`, `ADJLogLevelVerbose`, ...
-- **Android**: re-export (`api`) hai thư viện `com.adjust.sdk:adjust-android` và `com.adjust.sdk:adjust-android-webbridge` (v5.7.0) — consumer dùng thẳng `com.adjust.sdk.*` (`Adjust`, `AdjustConfig`, `AdjustEvent`, `AdjustAdRevenue`, ...).
+- **Android**: re-export (`api`) hai thư viện `com.adjust.sdk:adjust-android` và `com.adjust.sdk:adjust-android-webbridge` (v5.8.0) — consumer dùng thẳng `com.adjust.sdk.*` (`Adjust`, `AdjustConfig`, `AdjustEvent`, `AdjustAdRevenue`, ...).
 
 ## Khởi tạo
 
@@ -80,7 +80,7 @@ Quy đổi số tiền dạng micros (receiver `Long`) về đơn vị tiền t�
 
 ### Bridge iOS: package `cocoapods.Adjust`
 
-Đây là API "mượn" — module không định nghĩa type nào, nhưng là nơi duy nhất trong WaySDK khai báo cinterop nên mọi import `cocoapods.Adjust.*` ở các module khác đều đi qua module này. Các type Adjust iOS SDK 5.4.6 mà WaySDK đang dùng qua bridge:
+Đây là API "mượn" — module không định nghĩa type nào, nhưng là nơi duy nhất trong WaySDK khai báo cinterop nên mọi import `cocoapods.Adjust.*` ở các module khác đều đi qua module này. Các type Adjust iOS SDK 5.8.0 mà WaySDK đang dùng qua bridge:
 
 | Symbol | Vai trò |
 |---|---|
@@ -93,7 +93,7 @@ Quy đổi số tiền dạng micros (receiver `Long`) về đơn vị tiền t�
 
 ### Re-export Android: `com.adjust.sdk.*`
 
-`androidMain` khai báo `api(adjust-android)` và `api(adjust-android-webbridge)` (v5.7.0), nên consumer của `adjust_kmp` dùng trực tiếp Adjust Android SDK (`Adjust`, `AdjustConfig`, `AdjustEvent`, `AdjustAdRevenue`, webbridge cho WebView) mà không cần tự khai báo dependency.
+`androidMain` khai báo `api(adjust-android)` và `api(adjust-android-webbridge)` (v5.8.0), nên consumer của `adjust_kmp` dùng trực tiếp Adjust Android SDK (`Adjust`, `AdjustConfig`, `AdjustEvent`, `AdjustAdRevenue`, webbridge cho WebView) mà không cần tự khai báo dependency.
 
 ## Public models
 
@@ -103,9 +103,9 @@ Chỉ có `AttState` (enum, iOS only — xem phần ATT ở trên). Mọi model 
 
 - **iOS — cinterop trực tiếp qua XCFramework (không dùng CocoaPods plugin):**
   - `Adjust.def`: `language = Objective-C`, `modules = AdjustSdk`, `package = cocoapods.Adjust` (giữ tên package `cocoapods.*` để tương thích code cũ, nhưng cơ chế là cinterop trực tiếp).
-  - Cinterop compile với `-fmodules -F<slice>` trỏ vào `native-frameworks/AdjustSdk-5.4.6/.../AdjustSdk.xcframework`, slice `ios-arm64` cho `iosArm64` và `ios-arm64_x86_64-simulator` cho `iosSimulatorArm64`. XCFramework được task `:downloadInteropFrameworks` (root project) tải từ GitHub release `adjust/ios_sdk v5.4.6` (bản **Dynamic**); mọi task `cinterop*` phụ thuộc task này.
-  - Cinterop chỉ cung cấp header lúc compile — **app iOS cuối phải tự link binary `AdjustSdk.xcframework` (qua SPM)**. Root project có task `verifyInteropVersions` đối chiếu version trong `Package.resolved` của `iosApp` (identity `ios_sdk` → `AdjustSdk`) với version cinterop `5.4.6` để bảo đảm hai bên không lệch nhau.
+  - Cinterop compile với `-fmodules -F<slice>` trỏ vào `native-frameworks/AdjustSdk-<version>/AdjustSdk.xcframework`, slice `ios-arm64` cho `iosArm64` và `ios-arm64_x86_64-simulator` cho `iosSimulatorArm64`. XCFramework được task `:downloadInteropFrameworks` (root project) tải từ GitHub release `adjust/ios_sdk` (bản **Dynamic**) rồi bày ra layout cố định `<name>-<version>/<name>.xcframework`; mọi task `cinterop*` phụ thuộc task này. Version lấy từ `iosAdjustSdk` trong `gradle/libs.versions.toml` — không hardcode trong module.
+  - Cinterop chỉ cung cấp header lúc compile — **app iOS cuối phải tự link binary `AdjustSdk.xcframework` (qua SPM)**. Root project có task `verifyInteropVersions` đối chiếu version trong `Package.resolved` của `iosApp` (identity `ios_sdk` → `AdjustSdk`) với version cinterop để bảo đảm hai bên không lệch nhau.
   - Framework Kotlin output: `adjust_kmpKit`, static. Target hỗ trợ: `iosArm64`, `iosSimulatorArm64` (không có x86_64 riêng ngoài slice simulator).
-- **Android:** minSdk 24, compileSdk 36, namespace `com.adjust_kmp`. Adjust Android SDK v5.7.0 được expose dạng `api` nên tự động có mặt trong classpath của app.
-- **Lệch version giữa hai platform:** iOS đang pin Adjust 5.4.6, Android 5.7.0 — cùng dòng major 5 nhưng không đồng bộ số minor.
+- **Android:** minSdk 24, compileSdk 36, namespace `com.adjust_kmp`. Adjust Android SDK v5.8.0 được expose dạng `api` nên tự động có mặt trong classpath của app.
+- **Version hai platform:** cùng ở 5.8.0 (iOS pin qua `iosAdjustSdk`, Android qua `adjustAndroid`). Giữ hai số này bằng nhau khi bump — API bề mặt của Adjust không hoàn toàn đối xứng giữa hai platform, lệch minor là nguồn gốc của những khác biệt hành vi khó truy.
 - Publish lên GitHub Packages với coordinates `way-sdk:adjust_kmp:<way-sdk-version>`.

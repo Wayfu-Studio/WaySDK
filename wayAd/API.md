@@ -1,8 +1,27 @@
 # wayAd — Public API
 
-`wayAd` là module quảng cáo của WaySDK (Kotlin Multiplatform, target Android + iOS), cung cấp một lớp trừu tượng thống nhất trên nhiều ad network (hiện có **Google AdMob** và **AppLovin MAX**) cho 6 định dạng quảng cáo: banner, native, interstitial, rewarded, rewarded-interstitial và app open. Module bao gồm: entry point `WayAdKit`, hệ thống scope theo network (`NetworkAdapterScope`), manager cho quảng cáo fullscreen, hệ thống preload theo placement, cơ chế waterfall nhiều ad unit (strategy request), UI Compose Multiplatform (`BannerAdLayout`, `AdmobNativeLayout`, `MaxNativeLayout`, `FloatingNative`…) và các View XML cho Android.
+`wayAd` là module **core** quảng cáo của WaySDK (Kotlin Multiplatform, target Android + iOS): lớp trừu tượng thống nhất trên nhiều ad network cho 6 định dạng quảng cáo (banner, native, interstitial, rewarded, rewarded-interstitial, app open). Module chỉ chứa phần network-neutral: entry point `WayAdKit`, hệ thống scope theo network (`NetworkAdapterScope`), manager cho quảng cáo fullscreen, hệ thống preload theo placement, cơ chế waterfall nhiều ad unit (strategy request), state/layout Compose Multiplatform (`BannerAdLayout`, `BannerAdState`, `NativeAdState`, shimmer) và base View XML cho Android. **Core không chứa bất kỳ ad SDK nào** — mỗi network là một module implement riêng, theo đúng mô hình `wayPay` / `wayPay-store` / `wayPay-revenuecat` (nhưng đa slot: các network chạy song song qua `scopes`).
 
-Phụ thuộc (theo `wayAd/build.gradle.kts`): `commonMain` expose qua `api` các module `:wayPay` (kiểm tra subscription), `:wayInstall` (`UserInstallKit`), `:adjust_kmp` (tracking Adjust). Android thêm `:wayLayout` (layout XML), AppLovin SDK + toàn bộ mediation adapter (Google, Facebook, Vungle, Unity, ironSource, Mintegral, InMobi, Pangle, Chartboost, Fyber, Line, myTarget…), Google UMP, Firebase Analytics. iOS cinterop trực tiếp với `GoogleMobileAds.xcframework`, `UserMessagingPlatform.xcframework`, `AppLovinSDK.xcframework` (binary link qua SPM ở app tiêu thụ).
+Phụ thuộc (theo `wayAd/build.gradle.kts`): `commonMain` expose qua `api` các module `:wayPay` (kiểm tra subscription), `:wayInstall` (`UserInstallKit`), `:adjust_kmp` (tracking Adjust). Android thêm Google UMP; iOS cinterop duy nhất là `UserMessagingPlatform.xcframework` — UMP là CMP (consent platform) dùng chung toàn app nên thuộc core, không thuộc riêng Admob. GoogleMobileAds cinterop nằm ở `:wayAd-admob`, AppLovinSDK cinterop nằm ở `:wayAd-applovin`.
+
+## Chọn ad network — mỗi network một module
+
+| Module | Artifact | Chứa gì |
+|---|---|---|
+| `:wayAd` | `way-sdk:way-ad` | Core network-neutral (bắt buộc) |
+| `:wayAd-admob` | `way-sdk:way-ad-admob` | `AdmobNetworkAdapterScope`, adapter, `AdmobNativeLayout`, `FloatingNative`, `Admob*AdView`, factory Banner/Native, **toàn bộ** mediation stack của AdMob `com.google.ads.mediation:*` (gồm cả `applovin` — mediation đi theo network sở hữu nó) |
+| `:wayAd-applovin` | `way-sdk:way-ad-applovin` | `AppLovinMaxNetworkAdapterScope`, adapter, `MaxNativeLayout`, `AppLovin*AdView`, mediation stack của MAX `com.applovin.mediation:*-adapter` |
+
+| App dùng | Dependency Gradle | SPM package cần thêm trong Xcode |
+|---|---|---|
+| Chỉ AdMob | `way-ad` + `way-ad-admob` | GoogleMobileAds, GoogleUserMessagingPlatform, Adjust |
+| AdMob + AppLovin MAX | thêm `way-ad-applovin` | thêm AppLovin-MAX-Swift-Package |
+
+Nguyên tắc phân chia: **tách theo network adapter; mediation adapter đi theo network sở hữu nó.** `com.google.ads.mediation:applovin` là adapter để AdMob mediate AppLovin → thuộc `:wayAd-admob` (dù nó kéo theo `com.applovin:applovin-sdk` trên Android — giống như mọi mediation adapter khác đều kéo SDK của partner tương ứng). App chỉ dùng AdMob vẫn không có **MAX adapter code** và trên iOS không cần AppLovin-MAX-Swift-Package.
+
+**Lưu ý version:** các module `way-ad-*` dùng API nội bộ (`@InternalWayAdApi`) của core, không có cam kết ổn định giữa các phiên bản — luôn khai báo **cùng một version** cho mọi artifact `way-ad*`.
+
+Phiên bản SDK iOS được `verifyInteropVersions` (root `build.gradle.kts`) đối chiếu với `iosApp/.../Package.resolved`; app không khai báo AppLovin trong SPM thì pin AppLovin đơn giản bị bỏ qua, không báo lỗi.
 
 > **QUAN TRỌNG — Tự chặn quảng cáo khi user có subscription:**
 > wayAd tự động chặn load/show quảng cáo khi `com.waypay.AppPurchaseManager.getInstance().isSubscription == true`. Cơ chế này nằm ở **hai tầng**:
@@ -18,12 +37,12 @@ Ngoài ra, adapter cũng từ chối load khi `adUnitId` rỗng (`onAdFailedToLo
 Tham khảo cách dùng thực tế trong `composeApp/src/commonMain/kotlin/com/way_sdk/App.kt`:
 
 ```kotlin
-import com.wayad.admob.AdmobNetworkAdapterScope
+import com.wayad.admob.AdmobNetworkAdapterScope           // cần :wayAd-admob
 import com.wayad.admob.model.AdTestIds
-import com.wayad.applovin.AppLovinMaxNetworkAdapterScope
+import com.wayad.applovin.AppLovinMaxNetworkAdapterScope  // cần :wayAd-applovin
 import com.wayad.common.WayAdKit
 import com.wayad.common.model.WayAdConfig
-import com.wayad.common.registerAdResume
+import com.wayad.common.registerAdResume                  // overload 1 tham số nằm trong :wayAd-admob
 import com.wayad.core.api.appopen.AppOpenAdRequest
 
 // 1. Khởi tạo kit (chạy 1 lần khi app start)
@@ -34,8 +53,8 @@ WayAdKit.init(
         appLovinSdkKey = "<APPLOVIN_SDK_KEY>",  // bắt buộc nếu dùng AppLovinMaxNetworkAdapterScope
     ),
     isDebug = true,
-    scopes = listOf(
-        AdmobNetworkAdapterScope,               // mặc định nếu không truyền scopes
+    scopes = listOf(                            // BẮT BUỘC — core không còn default Admob
+        AdmobNetworkAdapterScope,
         AppLovinMaxNetworkAdapterScope,
     ),
     onComplete = {},
@@ -82,19 +101,19 @@ Entry point của module. Giữ `WayAdConfig`, danh sách scope đã đăng ký,
 | `scopes` | `List<NetworkAdapterScope>` | Danh sách scope đã đăng ký qua `init` (mặc định rỗng trước khi init). |
 | `isKitInitialized` | `StateFlow<Boolean>` | Trạng thái đã init xong. **Giá trị khởi tạo là `true` trên Android, `false` trên iOS** (adapter chờ flow này bật `true` trước khi thật sự load ad). |
 
-#### `fun init(wayAdConfig: WayAdConfig, isDebug: Boolean, scopes: List<NetworkAdapterScope> = listOf(AdmobNetworkAdapterScope))`
+#### `fun init(wayAdConfig: WayAdConfig, isDebug: Boolean, scopes: List<NetworkAdapterScope>)`
 
-Khởi tạo đồng bộ, **không** chạy luồng consent UMP. Lưu config + cờ debug, đăng ký `scopes`; trên Android gọi `com.adjust_kmp.setupAdjust` ngay; gọi `adapter.initialize()` cho từng scope; set `isKitInitialized = true`; khởi tạo `UserInstallKit` (module wayInstall).
+Khởi tạo đồng bộ, **không** chạy luồng consent UMP. `scopes` **không có default và không được rỗng** (`require(scopes.isNotEmpty())` — core không tự fallback sang AdMob; `AdmobNetworkAdapterScope` nằm ở `:wayAd-admob`). Lưu config + cờ debug, đăng ký `scopes`; trên Android gọi `com.adjust_kmp.setupAdjust` ngay; gọi `adapter.initialize()` cho từng scope; set `isKitInitialized = true`; khởi tạo `UserInstallKit` (module wayInstall).
 
 | Param | Kiểu | Mô tả |
 |---|---|---|
 | `wayAdConfig` | `WayAdConfig` | Config chung (token Adjust, SDK key AppLovin, timeout preload…). |
 | `isDebug` | `Boolean` | Bật chế độ debug (Adjust sandbox, verbose log AppLovin…). |
-| `scopes` | `List<NetworkAdapterScope>` | Các network sử dụng. Mặc định chỉ AdMob. |
+| `scopes` | `List<NetworkAdapterScope>` | Các network sử dụng. **Bắt buộc, không rỗng** — core không có default (Admob nằm ở `:wayAd-admob`). |
 
 **Trả về:** `Unit`.
 
-#### `fun init(wayAdConfig: WayAdConfig, isDebug: Boolean = false, scopes: List<NetworkAdapterScope> = listOf(AdmobNetworkAdapterScope), onComplete: () -> Unit = {})`
+#### `fun init(wayAdConfig: WayAdConfig, isDebug: Boolean = false, scopes: List<NetworkAdapterScope>, onComplete: () -> Unit = {})`
 
 Overload bất đồng bộ, **có** luồng consent: gọi `requestConsentInfoUpdate` (Google UMP — hiện form consent nếu cần) trước, sau đó (riêng iOS thêm bước `com.adjust_kmp.setupAdjust` — bao gồm xin quyền ATT) rồi mới gọi overload `init` 3 tham số ở trên và cuối cùng `onComplete()`.
 
@@ -133,7 +152,7 @@ Bọc `requestConsentInfoUpdate` thành hàm suspend.
 
 Alias cũ của [`WayAdToggle.setGlobalEnabled(enable)`](#wayadtoggle-object-comwayadcommon). Vẫn hoạt động, nhưng nên chuyển sang `WayAdToggle` để dùng được cả cờ riêng từng loại. **Trả về:** `Unit`.
 
-> `setNetworkAdapter(adapter)` và các property preload/strategy cũ trên `WayAdKit`, cùng `PreloadManager.preloadAd`/`preloadAdIfEmpty`, `InterstitialAdManager.Companion.*` (và tương tự ở các manager khác) đã bị **`@Deprecated(level = ERROR)`** — không compile được nữa; dùng API tương ứng trên scope (`AdmobNetworkAdapterScope...`).
+> `setNetworkAdapter(adapter)` và các property preload/strategy cũ trên `WayAdKit`, cùng `PreloadManager.preloadAd`/`preloadAdIfEmpty`, `InterstitialAdManager.Companion.*` (và tương tự ở các manager khác) đã bị **xóa hẳn** khỏi core (không còn symbol, kể cả dạng deprecated) — dùng API tương ứng trên scope (`AdmobNetworkAdapterScope...`).
 
 ### `WayAdToggle` (object, `com.wayad.common`)
 
@@ -179,16 +198,22 @@ Mọi cờ là atomic, đọc/ghi được từ bất kỳ thread nào; trạng 
 
 #### `fun WayAdKit.requestConsentInfoUpdate(activity: Any?, onComplete: (Boolean) -> Unit)`
 
-Chạy luồng consent Google UMP (debug geography EEA + test device id từ `WayAdConfig.testDeviceIds`, có danh sách mặc định). Hiện form consent nếu cần. Xem `awaitConsentInfoUpdate` về giá trị Boolean. **Trả về:** `Unit`.
+Chạy luồng consent Google UMP (debug geography EEA + test device id từ `WayAdConfig.testDeviceIds`, có danh sách mặc định). Hiện form consent nếu cần. UMP là CMP dùng chung toàn app (AppLovin MAX đọc chuỗi TCF do UMP ghi) nên nằm ở core và chạy bất kể app đăng ký network nào. Xem `awaitConsentInfoUpdate` về giá trị Boolean. **Trả về:** `Unit`.
 
-#### `fun WayAdKit.registerAdResume(appOpenAdRequest: AppOpenAdRequest)`
+#### `fun WayAdKit.registerAdResume(appOpenAdRequest: AppOpenAdRequest, scope: NetworkAdapterScope)`
 
-**Android:** preload app-open ad với key nội bộ `KEY_PRELOAD_AD_RESUME` (qua `AdmobNetworkAdapterScope`), tự thêm `AdActivity` (AdMob) và `AppLovinFullscreenActivity` vào danh sách activity bị chặn, rồi observe `ProcessLifecycleOwner`: mỗi lần app resume sẽ show app-open ad nếu thỏa điều kiện (không phải lần mở đầu của session, không bị `disableByClick`, activity/route hiện tại không nằm trong danh sách disable). Sau mỗi impression tự preload lại.
+Flow "ad resume" network-neutral, nằm ở **core**: preload app-open ad của `scope` truyền vào với key nội bộ `KEY_PRELOAD_AD_RESUME`, rồi observe `ProcessLifecycleOwner`: mỗi lần app resume sẽ show app-open ad nếu thỏa điều kiện (không phải lần mở đầu của session, không bị `disableByClick`, activity/route hiện tại không nằm trong danh sách disable). Sau mỗi impression tự preload lại. Gọi lần thứ hai trở đi chỉ log warning và bị bỏ qua (guard chống đăng ký đúp observer).
+
+Mỗi network module tự đăng ký fullscreen activity của nó vào danh sách chặn trong `adapter.initialize()`: Admob đăng ký `AdActivity`, AppLovin đăng ký `AppLovinFullscreenActivity` — core không biết activity của network nào.
+
+`:wayAd-admob` cung cấp overload tiện lợi giữ tương thích nguồn với chữ ký cũ (cùng package `com.wayad.common`): `fun WayAdKit.registerAdResume(appOpenAdRequest)` = gọi bản core với `AdmobNetworkAdapterScope`.
+
 **iOS:** no-op (chỉ log "Ios not registerAdResume").
 
 | Param | Kiểu | Mô tả |
 |---|---|---|
 | `appOpenAdRequest` | `AppOpenAdRequest` | Request app-open dùng cho ad resume (có thể là `AppOpenAdStrategyRequest`). |
+| `scope` | `NetworkAdapterScope` | Network cung cấp app-open ad cho flow resume. |
 
 **Trả về:** `Unit`.
 
@@ -205,6 +230,8 @@ Gom toàn bộ hạ tầng (preload, strategy loader, manager) cho **một** ad 
 | `rewardAdManager` | `RewardAdManager` | Manager rewarded (lazy). |
 | `appOpenAdManager` | `AppOpenAdManager` | Manager app open (lazy). |
 | `interstitialRewardAdManager` | `InterstitialRewardAdManager` | Manager rewarded-interstitial (lazy). |
+
+Ngoài ra scope còn expose 12 property `*AdPreload` / `*AdStrategyLoader` (public, gắn **`@InternalWayAdApi`** opt-in mức ERROR) — dành riêng cho các module network dùng chéo module, có thể đổi/xóa không báo trước; app **không** nên opt-in để dùng trực tiếp.
 
 #### `fun preloadAd(keyPreload: String, adRequest: CoreAdRequest)`
 
@@ -353,7 +380,7 @@ Mỗi factory có 3 overload `create` giống nhau (1 / 2 / 3 ad unit, cùng quy
 
 ### `PreloadManager` (object, `com.wayad.common`)
 
-Helper preload theo `AdViewConfig` (2 hàm cũ theo key đã deprecated ERROR).
+Helper preload theo `AdViewConfig`. 2 hàm cũ theo key (`preloadAd`, `preloadAdIfEmpty`) đã bị **xóa hẳn** — preload theo key dùng trực tiếp `NetworkAdapterScope.preloadAd/preloadIfEmpty`.
 
 #### `fun <T : CoreAdRequest> preloadAdByConfig(adViewConfig: AdViewConfig<T>)`
 
@@ -365,7 +392,7 @@ Như trên nhưng dùng `preloadIfEmpty` với `canLoadAds = adViewConfig.isVisi
 
 ### `CoreAdPreload<T, R>` (interface, `com.wayad.core.preload_manager`) và `BaseAdPreload<T, R>` (abstract class)
 
-Contract + hiện thực chung của hệ preload theo placement. Các lớp cụ thể (`BannerAdPreload`, `NativeAdPreload`…) là `internal` — app dùng gián tiếp qua `NetworkAdapterScope.preloadAd/preloadIfEmpty` và `manager.show(keyPreload, ...)`; interface/abstract class public chủ yếu phục vụ mở rộng. Hành vi theo `BaseAdPreload`:
+Contract + hiện thực chung của hệ preload theo placement. Các lớp cụ thể (`BannerAdPreload`, `NativeAdPreload`…) là public nhưng gắn **`@InternalWayAdApi`** (opt-in mức ERROR) — chúng tồn tại để các module network (`:wayAd-admob`, `:wayAd-applovin`) dùng chéo module, **không phải API cho app**; app dùng gián tiếp qua `NetworkAdapterScope.preloadAd/preloadIfEmpty` và `manager.show(keyPreload, ...)`. Hành vi theo `BaseAdPreload`:
 
 | Hàm | Chữ ký | Hành vi |
 |---|---|---|
@@ -388,7 +415,7 @@ Contract + hiện thực chung của hệ preload theo placement. Các lớp c�
 
 #### `AdStrategyLoader<AdRequest, AdResult>` (interface)
 
-`suspend fun asyncLoadAd(request: AdRequest): Result<AdResult>` — contract loader waterfall. Các hiện thực (`BannerAdStrategyLoader`…) là `internal`; app kích hoạt waterfall bằng cách truyền `*StrategyRequest` cho manager/preload/state.
+`suspend fun asyncLoadAd(request: AdRequest): Result<AdResult>` — contract loader waterfall. Các hiện thực (`BannerAdStrategyLoader`…) public nhưng gắn **`@InternalWayAdApi`** (dành cho các module network, không phải API cho app); app kích hoạt waterfall bằng cách truyền `*StrategyRequest` cho manager/preload/state.
 
 #### `suspend fun <T : CoreAdRequest, R : CoreAdResult> List<T>.executeLoadAd(block: suspend (request: T) -> Result<R>): Result<R>` (top-level, `com.wayad.core.strategy.ads`)
 
@@ -630,7 +657,7 @@ Android trả `com.google.android.gms.ads.nativead.NativeAd?`, iOS trả `GADNat
 
 ### Result (`com.wayad.core.api.*`, `com.wayad.admob.model`, `com.wayad.applovin.model`)
 
-`interface CoreAdResult { val adUnitId: String }`; mỗi loại ad có interface con rỗng: `BannerAdResult`, `NativeAdResult`, `InterstitialAdResult`, `RewardAdResult`, `InterstitialRewardAdResult`, `AppOpenAdResult`. Hiện thực cụ thể (generic `T` là đối tượng ad gốc của SDK network trên từng platform):
+`interface CoreAdResult { val adUnitId: String }`; mỗi loại ad có interface con: `BannerAdResult`, `NativeAdResult`, `InterstitialAdResult`, `RewardAdResult`, `InterstitialRewardAdResult`, `AppOpenAdResult`. Trong đó **`BannerAdResult` và `NativeAdResult` không rỗng** — cả hai bắt buộc `val callbackDispatcher: CallbackDispatcher<*AdShowCallback>` (state attach show-callback qua đây, không type-switch theo network); 4 interface còn lại rỗng. Riêng banner còn có `interface BannerAdRenderer { @Composable fun Render(modifier) }` (cùng file `BannerAdResult.kt`): banner result của một network **phải implement thêm** interface này thì `BannerAdLayout` mới render được — result không implement sẽ chỉ log warning và không hiển thị gì. Hiện thực cụ thể (generic `T` là đối tượng ad gốc của SDK network trên từng platform):
 
 | Model | Field chính |
 |---|---|
